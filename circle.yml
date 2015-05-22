@@ -17,13 +17,11 @@ dependencies:
   cache_directories:
     - ~/docker
   override:
-    - case $CIRCLE_NODE_INDEX in 0) ./circle_build.sh ;; esac:
-        parallel: true
+    - case $CIRCLE_NODE_INDEX in 0) ./circle_build.sh ;; esac
 
 test:
   override:
-    - case $CIRCLE_NODE_INDEX in 0) ./circle_test.sh ;; 1) ./circle_lint.sh ;; esac:
-        parallel: true
+    - case $CIRCLE_NODE_INDEX in 0) ./circle_test.sh ;; 1) ./circle_lint.sh ;; esac
   post:
       # Write the container's log output to artifacts.
     - i=0; for cid in $(docker ps -aq); do i=$((i+1)); docker logs $cid &> "${CIRCLE_ARTIFACTS}/${i}_$(docker inspect -f '{{ .Config.Hostname }}' ${cid})_${cid}.log"; done
