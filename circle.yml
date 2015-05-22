@@ -15,32 +15,15 @@ checkout:
 
 dependencies:
   cache_directories:
-    - "~/docker"
+    - ~/docker
   override:
-    # If there's a base image cached, load it. A click on CircleCI's "Clear
-    # Cache" will make sure we start with a clean slate.
-    - mkdir -p ~/docker
-    - if [[ -e ~/docker/base.tar ]]; then docker load -i ~/docker/base.tar; fi
-    # Pretend we're already bootstrapped, so that `make` doesn't try to get us
-    # started which is impossible without a working Go env.
-    - touch .bootstrap && make '.git/hooks/*'
-    - ./build/build-docker-dev.sh
-    - docker save "cockroachdb/cockroach-devbase" > ~/docker/base.tar
-    - if [[ ! -e ~/docker/dnsmasq.tar ]]; then docker pull "cockroachdb/dnsmasq" && docker save "cockroachdb/dnsmasq" > ~/docker/dnsmasq.tar; else docker load -i ~/docker/dnsmasq.tar; fi
-    # Print the history so that we can investigate potential steps which fatten
-    # the image needlessly.
-    - docker history "cockroachdb/cockroach-dev"
+    - case $CIRCLE_NODE_INDEX in 0) ./circle_build.sh ;; esac:
+        parallel: true
 
 test:
   override:
-    # Check whether the committer forgot to run `go generate`.
-    # Either `go generate` does not change any files or it does, in which case we print the diff and fail.
-    - docker run cockroachdb/cockroach-dev shell make check | tee "${CIRCLE_ARTIFACTS}/check.log"; test ${PIPESTATUS[0]} -eq 0
-    - docker run cockroachdb/cockroach-dev shell "(go generate ./... && git ls-files --modified --deleted --others --exclude-standard | diff /dev/null -) || (git add -A && git diff -u HEAD && false)" | tee "${CIRCLE_ARTIFACTS}/generate.log"; test ${PIPESTATUS[0]} -eq 0
-    - docker run "cockroachdb/cockroach-dev" test TESTTIMEOUT=30s TESTFLAGS='-v --vmodule=multiraft=5,raft=1' > "${CIRCLE_ARTIFACTS}/test.log"
-    - docker run "cockroachdb/cockroach-dev" testrace RACETIMEOUT=5m TESTFLAGS='-v --vmodule=multiraft=5,raft=1' > "${CIRCLE_ARTIFACTS}/testrace.log"
-    # TODO(pmattis): Use "make acceptance" again once we're using cockroachdb/builder on circleci
-    - run/local-cluster.sh stop && run/local-cluster.sh start && run/local-cluster.sh stop
+    - case $CIRCLE_NODE_INDEX in 0) ./circle_test.sh ;; 1) ./circle_lint.sh ;; esac:
+        parallel: true
   post:
       # Write the container's log output to artifacts.
     - i=0; for cid in $(docker ps -aq); do i=$((i+1)); docker logs $cid &> "${CIRCLE_ARTIFACTS}/${i}_$(docker inspect -f '{{ .Config.Hostname }}' ${cid})_${cid}.log"; done
