@@ -280,6 +280,10 @@ type StoreContext struct {
 
 	// EventFeed is a feed to which this store will publish events.
 	EventFeed *util.Feed
+
+	// storeUpdated is a channel on the node to inform it that the scan has
+	// been updated.
+	StoreUpdated chan struct{}
 }
 
 // Valid returns true if the StoreContext is populated correctly.
@@ -311,6 +315,7 @@ func NewStore(ctx StoreContext, eng engine.Engine, nodeDesc *proto.NodeDescripto
 	// TODO(tschottdorf) find better place to set these defaults.
 	ctx.setDefaults()
 
+	fmt.Printf("******  0 chan:%v\n", ctx.StoreUpdated)
 	if !ctx.Valid() {
 		panic(fmt.Sprintf("invalid store configuration: %+v", &ctx))
 	}
@@ -1572,6 +1577,11 @@ func (s *Store) updateStoreStatus() {
 	key := keys.StoreStatusKey(int32(s.Ident.StoreID))
 	if _, err := s.kvDB.Put(key, status); err != nil {
 		log.Error(err)
+	}
+
+	fmt.Printf("******* Chan:%v\n", s.ctx.StoreUpdated)
+	if s.ctx.StoreUpdated != nil {
+		s.ctx.StoreUpdated <- struct{}{}
 	}
 }
 

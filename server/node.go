@@ -65,7 +65,7 @@ type Node struct {
 	feed       NodeEventFeed        // Feed publisher for local events
 	status     *status.NodeStatusMonitor
 	startedAt  int64
-	// ScanCount is the number of times through the store scanning loop locked
+	// scanCount is the number of times through the store scanning loop locked
 	// by the completedScan mutex.
 	completedScan *sync.Cond
 	scanCount     int64
@@ -106,12 +106,14 @@ func BootstrapCluster(clusterID string, engines []engine.Engine, stopper *util.S
 	ctx := storage.StoreContext{}
 	ctx.ScanInterval = 10 * time.Minute
 	ctx.Clock = hlc.NewClock(hlc.UnixNano)
+	ctx.StoreUpdated = make(chan struct{}, 5)
 	// Create a KV DB with a local sender.
 	lSender := kv.NewLocalSender()
 	localDB := client.NewKV(nil, kv.NewTxnCoordSender(lSender, ctx.Clock, false, stopper))
 	localDB.User = storage.UserRoot
 	ctx.DB = localDB
 	ctx.Transport = multiraft.NewLocalRPCTransport()
+
 	for i, eng := range engines {
 		sIdent := proto.StoreIdent{
 			ClusterID: clusterID,
@@ -246,6 +248,7 @@ func (n *Node) start(rpcServer *rpc.Server, engines []engine.Engine,
 	// Initialize publisher for Node Events.
 	n.feed = NewNodeEventFeed(n.Descriptor.NodeID, n.ctx.EventFeed)
 
+	n.ctx.StoreUpdated = make(chan struct{}, 5)
 	n.startedAt = n.ctx.Clock.Now().WallTime
 	n.startStoresScanner(stopper)
 	n.startGossip(stopper)
@@ -426,12 +429,17 @@ func (n *Node) gossipCapacities() {
 // ctx.ScanInterval and store the status in the db.
 func (n *Node) startStoresScanner(stopper *util.Stopper) {
 	stopper.RunWorker(func() {
-		// TODO(bram): The number of stores is small. The node status should be
-		// updated whenever a store status is updated.
-		for interval := time.Duration(0); true; interval = n.ctx.ScanInterval {
-			// for interval := n.ctx.ScanInterval; true; interval = n.ctx.ScanInterval {
+		// Pick between the two smallest intervals
+		var minScanInterval time.Duration
+		if n.ctx.ScanInterval <= n.ctx.ScanMaxIdleTime {
+			minScanInterval = n.ctx.ScanInterval
+		} else {
+			minScanInterval = n.ctx.ScanMaxIdleTime
+		}
+		for interval := time.Duration(0); true; interval = minScanInterval {
 			select {
 			case <-time.After(interval):
+			case <-n.ctx.StoreUpdated:
 				if !stopper.StartTask() {
 					continue
 				}
