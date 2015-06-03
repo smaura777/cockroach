@@ -19,6 +19,7 @@ package storage_test
 
 import (
 	"bytes"
+	"fmt"
 	"math/rand"
 	"reflect"
 	"regexp"
@@ -463,6 +464,61 @@ func TestStoreRangeSplitOnConfigs(t *testing.T) {
 		}
 		return reflect.DeepEqual(keys, expKeys)
 	}, 500*time.Millisecond); err != nil {
+		t.Errorf("expected splits not found: %s", err)
+	}
+}
+
+// TestStoreRangeManySplits splits many ranges at once.
+func TestStoreRangeManySplits(t *testing.T) {
+	defer leaktest.AfterTest(t)
+	store, stopper := createTestStore(t)
+	defer stopper.Stop()
+
+	// Write zone configs to trigger the first round of splits.
+	zoneConfig := &proto.ZoneConfig{}
+	var calls []client.Call
+	for i := 0; i < 20; i++ {
+		key := proto.Key(fmt.Sprintf("db%02d", 20-i))
+		call := client.PutProto(keys.MakeKey(keys.ConfigZonePrefix, key), zoneConfig)
+		calls = append(calls, call)
+	}
+	if err := store.DB().Run(calls...); err != nil {
+		t.Fatal(err)
+	}
+
+	// Check that we finish splitting in allotted time.
+	if err := util.IsTrueWithin(func() bool {
+		call := client.Scan(keys.Meta2Prefix, keys.MetaMax, 0)
+		resp := call.Reply.(*proto.ScanResponse)
+		if err := store.DB().Run(call); err != nil {
+			t.Fatalf("failed to scan meta2 keys: %s", err)
+		}
+		return len(resp.Rows) == 24
+	}, 1*time.Second); err != nil {
+		t.Errorf("expected splits not found: %s", err)
+	}
+
+	// Then start the second round of splits.
+	acctConfig := &proto.AcctConfig{}
+	calls = []client.Call{}
+	for i := 0; i < 20; i++ {
+		key := proto.Key(fmt.Sprintf("db%02d/table", 20-i))
+		call := client.PutProto(keys.MakeKey(keys.ConfigAccountingPrefix, key), acctConfig)
+		calls = append(calls, call)
+	}
+	if err := store.DB().Run(calls...); err != nil {
+		t.Fatal(err)
+	}
+
+	// Check the result of splits again.
+	if err := util.IsTrueWithin(func() bool {
+		call := client.Scan(keys.Meta2Prefix, keys.MetaMax, 0)
+		resp := call.Reply.(*proto.ScanResponse)
+		if err := store.DB().Run(call); err != nil {
+			t.Fatalf("failed to scan meta2 keys: %s", err)
+		}
+		return len(resp.Rows) == 64
+	}, 1*time.Second); err != nil {
 		t.Errorf("expected splits not found: %s", err)
 	}
 }
